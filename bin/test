@@ -1,0 +1,61 @@
+#!/usr/bin/env bash
+
+[ -n "$DEBUG" ] && set -x && env
+
+# Syntax sugar.
+BIN_DIR=$(cd "$(dirname "$0")" || return; pwd) # absolute path
+BUILD_DIR=$1
+
+export PATH=$PATH:$BIN_DIR/../vendor/:$BIN_DIR/../vendor/pip-pop
+source "$BIN_DIR/utils"
+
+# Locale support for Pipenv.
+export LC_ALL=C.UTF-8
+export LANG=C.UTF-8
+
+# Location of 'manage.py', if it exists.
+MANAGE_FILE=$(find . -maxdepth 3 -type f -name 'manage.py' -printf '%d\t%P\n' | sort -nk1 | cut -f2 | head -1)
+MANAGE_FILE=${MANAGE_FILE:-fakepath}
+
+# Ensure that Django is explicitly specified in requirements.txt
+sp-grep -s django && DJANGO_INSTALLED=1
+
+([ -f "$MANAGE_FILE" ] && [ "$DJANGO_INSTALLED" ]) && CALL_TEST=1 || CALL_TEST=0
+[ -f "$BUILD_DIR/setup.py" ] && CALL_TEST=1 || CALL_TEST=0
+
+if [ $CALL_TEST -eq 1 ]; then
+    unset CALL_TEST
+
+    CALL_COMMAND="$ python setup.py test"
+    [ -f "$MANAGE_FILE" ] && CALL_COMMAND="$ python $MANAGE_FILE test"
+
+    set +e
+
+    puts-step "$CALL_COMMAND"
+
+    # Run collectstatic, cleanup some of the noisy output.
+    PYTHONPATH=${PYTHONPATH:-.}
+    export PYTHONPATH
+
+    # Create a temporary file for collecting the collectstaic logs.
+    TEST_LOG=$(mktemp)
+
+    ([ -f "$MANAGE_FILE" ] && [ "$DJANGO_INSTALLED" ]) && python "$MANAGE_FILE" test 2>&1 | tee "$TEST_LOG"
+    [ -f "$BUILD_DIR/setup.py" ] && python "$BUILD_DIR/setup.py" test 2>&1 | tee "$TEST_LOG"
+    TEST_STATUS="${PIPESTATUS[0]}"
+
+    set -e
+
+    # Display a warning if test failed.
+    [ "$TEST_STATUS" -ne 0 ] && {
+        echo
+        echo " !     Error while running '$CALL_COMMAND'."
+        echo "       See traceback above for details."
+        echo
+
+	exit 1
+    }
+
+    echo
+
+fi
